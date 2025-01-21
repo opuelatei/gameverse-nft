@@ -47,6 +47,8 @@
 (define-constant MAX-LEVEL u100)
 (define-constant MAX-EXPERIENCE-PER-LEVEL u1000)
 (define-constant BASE-EXPERIENCE-REQUIRED u100)
+(define-constant RATE-LIMIT-WINDOW u144)  ;; 24 hours in blocks
+(define-constant MAX-CALLS-PER-WINDOW u100)
 
 ;; Event Types
 (define-constant EVENT-ASSET-MINTED "asset-minted")
@@ -66,6 +68,7 @@
 (define-data-var total-assets uint u0)
 (define-data-var total-avatars uint u0)
 (define-data-var total-worlds uint u0)
+(define-data-var total-trades uint u0)
 
 ;; Protocol Administrator Whitelist
 (define-map protocol-admin-whitelist principal bool)
@@ -124,7 +127,7 @@
 (define-non-fungible-token gameverse-asset uint)
 (define-non-fungible-token player-avatar uint)
 
-;; Enhanced Asset Metadata Map
+;; Asset Metadata Map
 (define-map gameverse-asset-metadata 
   { token-id: uint }
   { 
@@ -175,6 +178,32 @@
     achievements: (list 20 (string-ascii 50))
   }
 )
+
+;; Leaderboard System
+(define-map player-rankings
+  { rank: uint }
+  { player: principal, score: uint }
+)
+
+;; Trade System
+(define-map active-trades
+  { trade-id: uint }
+  {
+    seller: principal,
+    asset-id: uint,
+    price: uint,
+    expiry: uint,
+    status: (string-ascii 20),
+    buyer: (optional principal)
+  }
+)
+
+;; Security Enhancement: Rate Limiting
+(define-map rate-limits
+  { function: (string-ascii 50), caller: principal }
+  { last-call: uint, calls: uint }
+)
+
 
 ;; Utility Functions
 (define-read-only (is-protocol-admin (sender principal))
@@ -244,6 +273,20 @@
   )
 )
 
+;; Leaderboard Functions
+(define-read-only (get-paginated-leaderboard (page uint) (items-per-page uint))
+  (let
+    (
+      (start (* page items-per-page))
+      (end (+ start items-per-page))
+    )
+    (filter is-valid-ranking
+      (map get-ranking-at-position (generate-sequence start end))
+    )
+  )
+)
+
+
 ;; Protocol Management
 (define-public (initialize-protocol 
   (entry-fee uint) 
@@ -262,6 +305,7 @@
 )
 
 ;; Asset Management
+;; mint-gameverse-asset
 (define-public (mint-gameverse-asset 
     (name (string-ascii 50))
     (description (string-ascii 200))
@@ -273,7 +317,6 @@
   (let 
     ((token-id (+ (var-get total-assets) u1)))
     
-    ;; Input validation
     (asserts! (is-protocol-admin tx-sender) ERR-NOT-AUTHORIZED)
     (asserts! (is-valid-name name) ERR-INVALID-NAME)
     (asserts! (is-valid-description description) ERR-INVALID-DESCRIPTION)
@@ -299,6 +342,10 @@
     )
     
     (var-set total-assets token-id)
+    
+    ;; Fixed event emission
+    (unwrap! (emit-asset-event EVENT-ASSET-MINTED token-id tx-sender none) ERR-NOT-AUTHORIZED)
+    
     (ok token-id)
   )
 )
@@ -504,6 +551,94 @@
   )
 )
 
+;; Event Emission Functions
+(define-public (emit-asset-event 
+    (event-type (string-ascii 20))
+    (asset-id uint)
+    (sender principal)
+    (recipient (optional principal))
+  )
+  (begin
+    (print {
+      event: event-type,
+      asset-id: asset-id,
+      sender: sender,
+      recipient: recipient,
+      timestamp: block-height
+    })
+    (ok true)
+  )
+)
+
+;; Trading System
+(define-public (create-trade
+    (asset-id uint)
+    (price uint)
+    (expiry uint)
+  )
+  (let
+    (
+      (trade-id (+ (var-get total-trades) u1))
+      (owner (unwrap! (nft-get-owner? gameverse-asset asset-id) ERR-INVALID-GAME-ASSET))
+    )
+    
+    (asserts! (is-eq tx-sender owner) ERR-NOT-AUTHORIZED)
+    (asserts! (> expiry block-height) ERR-INVALID-INPUT)
+    
+    (map-set active-trades
+      { trade-id: trade-id }
+      {
+        seller: tx-sender,
+        asset-id: asset-id,
+        price: price,
+        expiry: expiry,
+        status: "active",
+        buyer: none
+      }
+    )
+    
+    (var-set total-trades trade-id)
+    
+    ;; Fixed event emission
+    (unwrap! (emit-asset-event EVENT-TRADE-INITIATED asset-id tx-sender none) ERR-NOT-AUTHORIZED)
+    
+    (ok trade-id)
+  )
+)
+
+(define-public (execute-trade (trade-id uint))
+  (let
+    (
+      (trade (unwrap! (map-get? active-trades { trade-id: trade-id }) ERR-TRADE-NOT-FOUND))
+      (asset-id (get asset-id trade))
+    )
+    
+    (asserts! (is-eq (get status trade) "active") ERR-INVALID-TRADE-STATUS)
+    (asserts! (<= block-height (get expiry trade)) ERR-TRADE-EXPIRED)
+    (asserts! (>= (stx-get-balance tx-sender) (get price trade)) ERR-INSUFFICIENT-BALANCE)
+    
+    ;; Transfer STX
+    (try! (stx-transfer? (get price trade) tx-sender (get seller trade)))
+    
+    ;; Transfer NFT
+    (try! (nft-transfer? gameverse-asset asset-id (get seller trade) tx-sender))
+    
+    ;; Update trade status
+    (map-set active-trades
+      { trade-id: trade-id }
+      (merge trade {
+        status: "completed",
+        buyer: (some tx-sender)
+      })
+    )
+    
+    ;; Fixed event emission
+    (unwrap! (emit-asset-event EVENT-TRADE-COMPLETED asset-id (get seller trade) (some tx-sender)) ERR-NOT-AUTHORIZED)
+    
+    (ok true)
+  )
+)
+
 (define-private (is-valid-reward-candidate (player principal))
   (match (map-get? leaderboard { player: player })
     stats (and 
@@ -583,6 +718,48 @@
       (required-experience (calculate-level-up-experience current-level))
     )
     (>= new-total-experience required-experience)
+  )
+)
+
+(define-private (is-valid-ranking (entry (optional { player: principal, score: uint })))
+  (is-some entry)
+)
+
+(define-private (get-ranking-at-position (position uint))
+  (map-get? player-rankings { rank: position })
+)
+
+(define-private (generate-sequence (start uint) (end uint))
+  (list start)
+)
+
+(define-private (check-rate-limit (function (string-ascii 50)))
+  (let
+    (
+      (current-limits (default-to
+        { last-call: u0, calls: u0 }
+        (map-get? rate-limits { function: function, caller: tx-sender })
+      ))
+    )
+    (if (> (- block-height (get last-call current-limits)) RATE-LIMIT-WINDOW)
+      (begin
+        (map-set rate-limits
+          { function: function, caller: tx-sender }
+          { last-call: block-height, calls: u1 }
+        )
+        true
+      )
+      (if (< (get calls current-limits) MAX-CALLS-PER-WINDOW)
+        (begin
+          (map-set rate-limits
+            { function: function, caller: tx-sender }
+            (merge current-limits { calls: (+ (get calls current-limits) u1) })
+          )
+          true
+        )
+        false
+      )
+    )
   )
 )
 
