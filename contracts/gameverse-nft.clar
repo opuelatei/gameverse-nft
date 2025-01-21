@@ -38,3 +38,28 @@
 (define-constant ERR-MAX-LEVEL-REACHED (err u22))
 (define-constant ERR-MAX-EXPERIENCE-REACHED (err u23))
 (define-constant ERR-INVALID-LEVEL-UP (err u24))
+
+;; Constants for game mechanics
+(define-constant MAX-LEVEL u100)
+(define-constant MAX-EXPERIENCE-PER-LEVEL u1000)
+(define-constant BASE-EXPERIENCE-REQUIRED u100)
+
+;; Protocol Configuration
+(define-data-var protocol-fee uint u10)
+(define-data-var max-leaderboard-entries uint u50)
+(define-data-var total-prize-pool uint u0)
+(define-data-var total-assets uint u0)
+(define-data-var total-avatars uint u0)
+(define-data-var total-worlds uint u0)
+
+;; Protocol Administrator Whitelist
+(define-map protocol-admin-whitelist principal bool)
+
+;; Input Validation Functions
+(define-private (is-valid-name (name (string-ascii 50)))
+  (and 
+    (>= (len name) u1)
+    (<= (len name) u50)
+    (not (is-eq name ""))
+  )
+)
