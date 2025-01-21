@@ -408,3 +408,132 @@
     )
   )
 )
+
+;; Game World Management
+(define-public (create-game-world 
+    (name (string-ascii 50))
+    (description (string-ascii 200))
+    (entry-requirement uint)
+  )
+  (let
+    ((world-id (+ (var-get total-worlds) u1)))
+    
+    ;; Input validation
+    (asserts! (is-protocol-admin tx-sender) ERR-NOT-AUTHORIZED)
+    (asserts! (is-valid-name name) ERR-INVALID-NAME)
+    (asserts! (is-valid-description description) ERR-INVALID-DESCRIPTION)
+    (asserts! (>= entry-requirement u0) ERR-INVALID-INPUT)
+    
+    (map-set game-worlds
+      { world-id: world-id }
+      {
+        name: name,
+        description: description,
+        entry-requirement: entry-requirement,
+        active-players: u0,
+        total-rewards: u0
+      }
+    )
+    
+    (var-set total-worlds world-id)
+    (ok world-id)
+  )
+)
+
+;; Leaderboard Management
+(define-public (update-player-score 
+  (player principal) 
+  (new-score uint)
+)
+  (let 
+    (
+      (current-stats (unwrap! 
+        (map-get? leaderboard { player: player }) 
+        ERR-PLAYER-NOT-FOUND
+      ))
+    )
+    (asserts! (is-protocol-admin tx-sender) ERR-NOT-AUTHORIZED)
+    (asserts! (is-valid-principal player) ERR-INVALID-INPUT)
+    (asserts! (and (>= new-score u0) (<= new-score u10000)) ERR-INVALID-SCORE)
+    
+    (map-set leaderboard 
+      { player: player }
+      (merge current-stats 
+        {
+          score: new-score,
+          games-played: (+ (get games-played current-stats) u1)
+        }
+      )
+    )
+    
+    (ok true)
+  )
+)
+
+;; Reward System
+(define-public (distribute-bitcoin-rewards)
+  (let 
+    (
+      (top-players (get-top-players))
+    )
+    (asserts! (is-protocol-admin tx-sender) ERR-NOT-AUTHORIZED)
+    
+    (try! 
+      (fold distribute-reward 
+        (filter is-valid-reward-candidate top-players) 
+        (ok true)
+      )
+    )
+    
+    (ok true)
+  )
+)
+
+(define-private (is-valid-reward-candidate (player principal))
+  (match (map-get? leaderboard { player: player })
+    stats (and 
+            (> (get score stats) u0)
+            (is-valid-principal player)
+          )
+    false
+  )
+)
+
+(define-private (distribute-reward 
+  (player principal) 
+  (previous-result (response bool uint))
+)
+  (match (map-get? leaderboard { player: player })
+    player-stats 
+      (let 
+        (
+          (reward-amount (calculate-reward (get score player-stats)))
+        )
+        (if (and (is-ok previous-result) (> reward-amount u0))
+          (begin
+            (map-set leaderboard 
+              { player: player }
+              (merge player-stats 
+                { total-rewards: (+ (get total-rewards player-stats) reward-amount) }
+              )
+            )
+            (ok true)
+          )
+          previous-result
+        )
+      )
+    previous-result
+  )
+)
+
+(define-private (calculate-reward (score uint))
+  (if (and (> score u100) (<= score u10000))
+    (* score u10)
+    u0
+  )
+)
+
+;; Helper function to calculate required experience for next level
+(define-private (calculate-level-up-experience (current-level uint))
+  (* BASE-EXPERIENCE-REQUIRED current-level)
+)
