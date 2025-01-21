@@ -38,11 +38,26 @@
 (define-constant ERR-MAX-LEVEL-REACHED (err u22))
 (define-constant ERR-MAX-EXPERIENCE-REACHED (err u23))
 (define-constant ERR-INVALID-LEVEL-UP (err u24))
+(define-constant ERR-TRADE-NOT-FOUND (err u25))
+(define-constant ERR-TRADE-EXPIRED (err u26))
+(define-constant ERR-INVALID-TRADE-STATUS (err u27))
+(define-constant ERR-INSUFFICIENT-BALANCE (err u28))
 
 ;; Constants for game mechanics
 (define-constant MAX-LEVEL u100)
 (define-constant MAX-EXPERIENCE-PER-LEVEL u1000)
 (define-constant BASE-EXPERIENCE-REQUIRED u100)
+
+;; Event Types
+(define-constant EVENT-ASSET-MINTED "asset-minted")
+(define-constant EVENT-ASSET-TRANSFERRED "asset-transferred")
+(define-constant EVENT-AVATAR-CREATED "avatar-created")
+(define-constant EVENT-EXPERIENCE-GAINED "experience-gained")
+(define-constant EVENT-LEVEL-UP "level-up")
+(define-constant EVENT-WORLD-CREATED "world-created")
+(define-constant EVENT-TRADE-INITIATED "trade-initiated")
+(define-constant EVENT-TRADE-COMPLETED "trade-completed")
+(define-constant EVENT-TRADE-CANCELLED "trade-cancelled")
 
 ;; Protocol Configuration
 (define-data-var protocol-fee uint u10)
