@@ -537,3 +537,40 @@
 (define-private (calculate-level-up-experience (current-level uint))
   (* BASE-EXPERIENCE-REQUIRED current-level)
 )
+
+;; Helper function to validate experience points
+(define-private (validate-experience-gain
+    (current-experience uint)
+    (gained-experience uint)
+    (current-level uint)
+  )
+  (let
+    (
+      (max-allowed-gain (calculate-level-up-experience current-level))
+      (new-total-experience (+ current-experience gained-experience))
+    )
+    (and
+      (<= gained-experience max-allowed-gain)
+      (<= new-total-experience (* MAX-EXPERIENCE-PER-LEVEL current-level))
+    )
+  )
+)
+
+;; Helper function to check if level up is warranted
+(define-private (can-level-up
+    (current-experience uint)
+    (gained-experience uint)
+    (current-level uint)
+  )
+  (let
+    (
+      (new-total-experience (+ current-experience gained-experience))
+      (required-experience (calculate-level-up-experience current-level))
+    )
+    (>= new-total-experience required-experience)
+  )
+)
+
+;; Initialize Protocol
+;; Set contract deployer as initial admin
+(map-set protocol-admin-whitelist tx-sender true)
